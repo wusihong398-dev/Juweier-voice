@@ -1,0 +1,61 @@
+name: Build Juweier Voice
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Create Android platform
+        run: flutter create --platforms=android .
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Juweier-Voice-Android-v0.1.0
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Enable Windows
+        run: flutter config --enable-windows-desktop
+      - name: Create Windows platform
+        run: flutter create --platforms=windows .
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Juweier-Voice-Windows-v0.1.0
+          path: build/windows/x64/runner/Release/**
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Create iOS platform
+        run: flutter create --platforms=ios .
+      - run: flutter pub get
+      - run: flutter analyze
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Juweier-Voice-iOS-unsigned-v0.1.0
+          path: build/ios/iphoneos/Runner.app/**
