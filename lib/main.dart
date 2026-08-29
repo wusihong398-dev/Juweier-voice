@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -6,6 +8,7 @@ void main() => runApp(const JuweierVoiceApp());
 
 class JuweierVoiceApp extends StatelessWidget {
   const JuweierVoiceApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -13,8 +16,12 @@ class JuweierVoiceApp extends StatelessWidget {
       title: '橘味儿AI声演',
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xffff6b00), brightness: Brightness.dark),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xffff6b00),
+          brightness: Brightness.dark,
+        ),
         scaffoldBackgroundColor: const Color(0xff100b0a),
+        cardTheme: const CardThemeData(color: Color(0xff211814)),
       ),
       home: const HomePage(),
     );
@@ -35,9 +42,15 @@ class _HomePageState extends State<HomePage> {
   Future<void> checkServer() async {
     setState(() => status = '检测中…');
     try {
-      final r = await http.get(Uri.parse('$server/health')).timeout(const Duration(seconds: 5));
+      final r = await http
+          .get(Uri.parse('$server/health'))
+          .timeout(const Duration(seconds: 5));
       final j = jsonDecode(r.body) as Map<String, dynamic>;
-      setState(() => status = j['ok'] == true ? '在线 · ${j['gpu'] ?? 'AI Worker'}' : '异常');
+      setState(() {
+        status = j['ok'] == true
+            ? '在线 · ${j['gpu'] ?? 'AI Worker'}'
+            : '异常';
+      });
     } catch (_) {
       setState(() => status = '离线');
     }
@@ -46,83 +59,332 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      _Studio(onCheck: checkServer, status: status),
-      const _SimplePage(title: 'AI演员库', text: '保存固定 Voice ID，让同一角色跨片段保持同一个声音。'),
-      const _SimplePage(title: 'AI声音设计师', text: '通过文字描述性别、年龄、音高、质感、情绪、方言、气息与表演风格，生成目标音色。'),
-      const _SimplePage(title: '项目中心', text: '管理整集短剧、人物、批量片段、处理进度与最终导出。'),
-      _Settings(server: server, status: status, onChanged: (v) => server = v, onCheck: checkServer),
+      StudioPage(server: server, status: status, onCheck: checkServer),
+      const InfoPage(
+        title: 'AI演员库',
+        text: '保存固定 Voice ID，让同一角色跨片段保持同一个声音。后续将加入角色头像、试听、锁定音色和跨集复用。',
+      ),
+      const InfoPage(
+        title: 'AI声音设计师',
+        text: '计划支持通过文字描述性别、年龄、音高、共鸣、明亮度、沙哑度、气息、语速、情绪、地域口音与方言特征来创建目标音色。',
+      ),
+      const InfoPage(
+        title: '项目中心',
+        text: '短剧项目将统一管理视频片段、人物、Voice ID、处理状态与导出文件。已经验证的 Roformer 对白分离、Seed-VC 换声、环境声混回与 MP4 回写链路会作为完整项目流程接入。',
+      ),
+      SettingsPage(
+        server: server,
+        status: status,
+        onChanged: (v) => server = v.trimRight().replaceAll(RegExp(r'/$'), ''),
+        onCheck: checkServer,
+      ),
     ];
+
     return Scaffold(
-      body: Row(children: [
-        NavigationRail(
-          selectedIndex: index,
-          onDestinationSelected: (v) => setState(() => index = v),
-          labelType: NavigationRailLabelType.all,
-          destinations: const [
-            NavigationRailDestination(icon: Icon(Icons.auto_awesome), label: Text('声演')),
-            NavigationRailDestination(icon: Icon(Icons.record_voice_over), label: Text('演员')),
-            NavigationRailDestination(icon: Icon(Icons.graphic_eq), label: Text('造声')),
-            NavigationRailDestination(icon: Icon(Icons.video_library), label: Text('项目')),
-            NavigationRailDestination(icon: Icon(Icons.settings), label: Text('设置')),
-          ],
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(child: pages[index]),
-      ]),
+      body: Row(
+        children: [
+          NavigationRail(
+            selectedIndex: index,
+            onDestinationSelected: (v) => setState(() => index = v),
+            labelType: NavigationRailLabelType.all,
+            destinations: const [
+              NavigationRailDestination(
+                icon: Icon(Icons.auto_awesome),
+                label: Text('声演'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.record_voice_over),
+                label: Text('演员'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.graphic_eq),
+                label: Text('造声'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.video_library),
+                label: Text('项目'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.settings),
+                label: Text('设置'),
+              ),
+            ],
+          ),
+          const VerticalDivider(width: 1),
+          Expanded(child: pages[index]),
+        ],
+      ),
     );
   }
 }
 
-class _Studio extends StatelessWidget {
-  final VoidCallback onCheck;
+class StudioPage extends StatefulWidget {
+  final String server;
   final String status;
-  const _Studio({required this.onCheck, required this.status});
+  final VoidCallback onCheck;
+  const StudioPage({super.key, required this.server, required this.status, required this.onCheck});
+
+  @override
+  State<StudioPage> createState() => _StudioPageState();
+}
+
+class _StudioPageState extends State<StudioPage> {
+  PlatformFile? source;
+  PlatformFile? target;
+  bool running = false;
+  String result = '请选择源语音和目标参考声音。';
+  double similarity = 0.7;
+  double intelligibility = 0.7;
+  int steps = 20;
+
+  Future<PlatformFile?> pickAudio() async {
+    final r = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['wav', 'mp3', 'm4a', 'flac'],
+      allowMultiple: false,
+    );
+    return r?.files.single;
+  }
+
+  Future<void> convert() async {
+    if (source?.path == null || target?.path == null) {
+      setState(() => result = '请先选择两个音频文件。');
+      return;
+    }
+    setState(() {
+      running = true;
+      result = '正在通过 Seed-VC V2 换声…';
+    });
+    try {
+      final req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${widget.server}/api/v1/vc/convert'),
+      );
+      req.files.add(await http.MultipartFile.fromPath('source', source!.path!));
+      req.files.add(await http.MultipartFile.fromPath('target', target!.path!));
+      req.fields.addAll({
+        'diffusion_steps': '$steps',
+        'length_adjust': '1.0',
+        'intelligibility_cfg_rate': intelligibility.toStringAsFixed(2),
+        'similarity_cfg_rate': similarity.toStringAsFixed(2),
+        'top_p': '0.9',
+        'temperature': '1.0',
+        'repetition_penalty': '1.0',
+        'convert_style': 'false',
+      });
+      final streamed = await req.send().timeout(const Duration(minutes: 5));
+      final body = await streamed.stream.bytesToString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      if (streamed.statusCode == 200 && data['ok'] == true) {
+        setState(() {
+          result = '换声成功\n任务：${data['task_id']}\n耗时：${data['processing_seconds']} 秒\n峰值显存：${data['peak_vram_mb']} MB\n服务器输出：${data['output_path']}';
+        });
+      } else {
+        setState(() => result = '换声失败：$body');
+      }
+    } catch (e) {
+      setState(() => result = '请求失败：$e');
+    } finally {
+      if (mounted) setState(() => running = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ListView(padding: const EdgeInsets.all(28), children: [
-      Row(children: [
-        const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('橘味儿AI声演', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
-          SizedBox(height: 6),
-          Text('角色统一 · 方言保真 · 环境声还原 · 批量短剧换声'),
-        ])),
-        ActionChip(avatar: const Icon(Icons.circle, size: 12), label: Text(status), onPressed: onCheck),
-      ]),
-      const SizedBox(height: 28),
-      Wrap(spacing: 16, runSpacing: 16, children: const [
-        _Feature(icon: Icons.movie_filter, title: 'AI短剧配音', text: '批量导入 MP4，统一角色声音并保留环境声。'),
-        _Feature(icon: Icons.swap_horiz, title: '导入语音换声', text: '支持音视频输入，自动提取音频并完成角色换声。'),
-        _Feature(icon: Icons.spatial_audio_off, title: '对白分离', text: 'Roformer 分离对白与 BGM / 环境声 / 音效。'),
-        _Feature(icon: Icons.psychology, title: 'AI声音设计', text: '通过自然语言描述创建新的目标音色。'),
-      ]),
-      const SizedBox(height: 30),
-      const Text('快速工作流', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 12),
-      const Card(child: Padding(padding: EdgeInsets.all(20), child: Text('导入视频  →  识别/分离对白  →  选择AI演员  →  Seed-VC换声  →  环境声混回  →  导出MP4'))),
-    ]);
+    return ListView(
+      padding: const EdgeInsets.all(28),
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('橘味儿AI声演', style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
+                  SizedBox(height: 6),
+                  Text('Seed-VC V2 · 方言与表演保真 · 对白分离 · 环境声还原'),
+                ],
+              ),
+            ),
+            ActionChip(
+              avatar: const Icon(Icons.circle, size: 12),
+              label: Text(widget.status),
+              onPressed: widget.onCheck,
+            ),
+          ],
+        ),
+        const SizedBox(height: 24),
+        const Text('已接入测试功能', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('导入语音换声', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                const Text('连接当前已验证的 18110 Seed-VC V2 Worker。源语音保留台词、方言和表演，目标参考音频决定角色音色。'),
+                const SizedBox(height: 18),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 10,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: running ? null : () async {
+                        final f = await pickAudio();
+                        if (f != null) setState(() => source = f);
+                      },
+                      icon: const Icon(Icons.audio_file),
+                      label: Text(source == null ? '选择源语音' : '源：${source!.name}'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: running ? null : () async {
+                        final f = await pickAudio();
+                        if (f != null) setState(() => target = f);
+                      },
+                      icon: const Icon(Icons.person_pin_circle),
+                      label: Text(target == null ? '选择目标参考声音' : '目标：${target!.name}'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Text('音色相似度 ${(similarity * 100).round()}%'),
+                Slider(value: similarity, min: 0.4, max: 1.0, divisions: 12, onChanged: running ? null : (v) => setState(() => similarity = v)),
+                Text('台词清晰度 ${(intelligibility * 100).round()}%'),
+                Slider(value: intelligibility, min: 0.4, max: 1.0, divisions: 12, onChanged: running ? null : (v) => setState(() => intelligibility = v)),
+                Row(
+                  children: [
+                    const Text('质量：'),
+                    const SizedBox(width: 10),
+                    SegmentedButton<int>(
+                      segments: const [
+                        ButtonSegment(value: 10, label: Text('快速 10步')),
+                        ButtonSegment(value: 20, label: Text('标准 20步')),
+                        ButtonSegment(value: 30, label: Text('精细 30步')),
+                      ],
+                      selected: {steps},
+                      onSelectionChanged: running ? null : (v) => setState(() => steps = v.first),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: running ? null : convert,
+                  icon: running
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.auto_awesome),
+                  label: Text(running ? '正在换声…' : '开始AI换声'),
+                ),
+                const SizedBox(height: 16),
+                SelectableText(result),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 22),
+        const Text('已验证完整链路', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        const Wrap(
+          spacing: 14,
+          runSpacing: 14,
+          children: [
+            Feature(icon: Icons.movie_filter, title: 'MP4 批量换声', text: '10条批量测试成功，支持断点续跑。'),
+            Feature(icon: Icons.spatial_audio_off, title: 'Roformer 对白分离', text: '分离人物对白与 Other 背景/环境/音效轨。'),
+            Feature(icon: Icons.surround_sound, title: '环境声还原', text: '换声对白与原环境轨重新混音。'),
+            Feature(icon: Icons.video_file, title: 'MP4 无损画面回写', text: '原 HEVC 视频流直接 copy，只重新编码音频。'),
+          ],
+        ),
+        const SizedBox(height: 20),
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(18),
+            child: Text('完整短剧流程：MP4 → 提取音轨 → Roformer分离对白 → Seed-VC角色换声 → BGM/环境声/音效混回 → 原画面回写MP4。\n\n当前测试版已把实时 Seed-VC 换声做成可操作功能；完整 MP4 自动流水线下一步接入主服务 API 后，Windows / Android / iOS 三端共用同一套处理能力。'),
+          ),
+        ),
+      ],
+    );
   }
 }
 
-class _Feature extends StatelessWidget {
-  final IconData icon; final String title; final String text;
-  const _Feature({required this.icon, required this.title, required this.text});
+class Feature extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String text;
+  const Feature({super.key, required this.icon, required this.title, required this.text});
+
   @override
-  Widget build(BuildContext context) => SizedBox(width: 300, child: Card(child: Padding(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon, size: 32), const SizedBox(height: 14), Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)), const SizedBox(height: 8), Text(text)]))));
+  Widget build(BuildContext context) => SizedBox(
+        width: 275,
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, size: 30),
+                const SizedBox(height: 12),
+                Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 7),
+                Text(text),
+              ],
+            ),
+          ),
+        ),
+      );
 }
 
-class _SimplePage extends StatelessWidget {
-  final String title; final String text;
-  const _SimplePage({required this.title, required this.text});
+class InfoPage extends StatelessWidget {
+  final String title;
+  final String text;
+  const InfoPage({super.key, required this.title, required this.text});
+
   @override
-  Widget build(BuildContext context) => Padding(padding: const EdgeInsets.all(32), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)), const SizedBox(height: 18), Card(child: Padding(padding: const EdgeInsets.all(24), child: Text(text, style: const TextStyle(fontSize: 16))))]));
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 18),
+            Card(child: Padding(padding: const EdgeInsets.all(24), child: Text(text, style: const TextStyle(fontSize: 16)))),
+          ],
+        ),
+      );
 }
 
-class _Settings extends StatefulWidget {
-  final String server; final String status; final ValueChanged<String> onChanged; final VoidCallback onCheck;
-  const _Settings({required this.server, required this.status, required this.onChanged, required this.onCheck});
-  @override State<_Settings> createState() => _SettingsState();
+class SettingsPage extends StatefulWidget {
+  final String server;
+  final String status;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onCheck;
+  const SettingsPage({super.key, required this.server, required this.status, required this.onChanged, required this.onCheck});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
 }
-class _SettingsState extends State<_Settings> {
+
+class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController c = TextEditingController(text: widget.server);
-  @override Widget build(BuildContext context) => Padding(padding: const EdgeInsets.all(32), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('服务器设置', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)), const SizedBox(height: 24), TextField(controller: c, decoration: const InputDecoration(labelText: 'NOVRIA Voice API 地址', border: OutlineInputBorder()), onChanged: widget.onChanged), const SizedBox(height: 16), FilledButton.icon(onPressed: widget.onCheck, icon: const Icon(Icons.health_and_safety), label: Text('检测服务器 · ${widget.status}'))]));
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('服务器设置', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 24),
+            TextField(
+              controller: c,
+              decoration: const InputDecoration(labelText: 'NOVRIA Voice API 地址', hintText: 'http://127.0.0.1:18110', border: OutlineInputBorder()),
+              onChanged: widget.onChanged,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(onPressed: widget.onCheck, icon: const Icon(Icons.health_and_safety), label: Text('检测服务器 · ${widget.status}')),
+            const SizedBox(height: 18),
+            Text(Platform.isWindows ? '当前平台：Windows · 本机服务器可使用 127.0.0.1' : '移动端请填写运行 NOVRIA Voice Server 的电脑局域网或公网地址。'),
+          ],
+        ),
+      );
 }
