@@ -19,12 +19,11 @@ jobs:
         run: rm -f test/widget_test.dart
       - name: Use Android compileSdk 36
         run: |
-          yes | sdkmanager "platforms;android-36" >/dev/null || true
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' android/app/build.gradle.kts
           grep -n "compileSdk" android/app/build.gradle.kts
       - run: flutter pub get
-      - name: Generate orange microphone icons
-        run: dart run flutter_launcher_icons
+      - name: Generate Android orange microphone icon
+        run: dart run flutter_launcher_icons -f flutter_launcher_icons_android.yaml
       - run: flutter analyze
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
@@ -47,8 +46,8 @@ jobs:
         shell: pwsh
         run: Remove-Item test/widget_test.dart -Force -ErrorAction SilentlyContinue
       - run: flutter pub get
-      - name: Generate orange microphone icons
-        run: dart run flutter_launcher_icons
+      - name: Generate Windows orange microphone icon
+        run: dart run flutter_launcher_icons -f flutter_launcher_icons_windows.yaml
       - run: flutter analyze
       - run: flutter build windows --release
       - uses: actions/upload-artifact@v4
@@ -68,8 +67,8 @@ jobs:
       - name: Remove generated sample test
         run: rm -f test/widget_test.dart
       - run: flutter pub get
-      - name: Generate orange microphone icons
-        run: dart run flutter_launcher_icons
+      - name: Generate iOS orange microphone icon
+        run: dart run flutter_launcher_icons -f flutter_launcher_icons_ios.yaml
       - run: flutter analyze
       - name: Build unsigned iOS app
         run: flutter build ios --release --no-codesign
