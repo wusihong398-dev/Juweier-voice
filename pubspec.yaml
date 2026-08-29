@@ -1,7 +1,7 @@
 name: juweier_voice
-description: 橘味儿AI声演 - AI voice studio for Windows, Android and iOS
+description: 橘味儿配音 - AI voice studio for Windows, Android and iOS
 publish_to: 'none'
-version: 0.3.0+3
+version: 0.3.1+4
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
