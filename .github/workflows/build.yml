@@ -15,6 +15,8 @@ jobs:
           channel: stable
       - name: Create Android platform
         run: flutter create --platforms=android .
+      - name: Remove generated sample test
+        run: rm -f test/widget_test.dart
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter build apk --release
@@ -34,6 +36,9 @@ jobs:
         run: flutter config --enable-windows-desktop
       - name: Create Windows platform
         run: flutter create --platforms=windows .
+      - name: Remove generated sample test
+        shell: pwsh
+        run: Remove-Item test/widget_test.dart -Force -ErrorAction SilentlyContinue
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter build windows --release
@@ -51,6 +56,8 @@ jobs:
           channel: stable
       - name: Create iOS platform
         run: flutter create --platforms=ios .
+      - name: Remove generated sample test
+        run: rm -f test/widget_test.dart
       - run: flutter pub get
       - run: flutter analyze
       - name: Build unsigned iOS app
