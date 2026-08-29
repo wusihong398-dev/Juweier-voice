@@ -1,7 +1,7 @@
 name: juweier_voice
 description: 橘味儿AI声演 - AI voice studio for Windows, Android and iOS
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -18,6 +18,19 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/app_icon.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/app_icon.png
+  min_sdk_android: 21
+  windows:
+    generate: true
+    image_path: assets/app_icon.png
+    icon_size: 256
