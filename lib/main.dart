@@ -62,15 +62,15 @@ class _HomePageState extends State<HomePage> {
       StudioPage(server: server, status: status, onCheck: checkServer),
       const InfoPage(
         title: 'AI演员库',
-        text: '保存固定 Voice ID，让同一角色跨片段保持同一个声音。后续将加入角色头像、试听、锁定音色和跨集复用。',
+        text: '保存固定 Voice ID，让同一角色跨片段保持同一个声音。所有参考声音入口统一支持音频和视频素材。',
       ),
       const InfoPage(
         title: 'AI声音设计师',
-        text: '计划支持通过文字描述性别、年龄、音高、共鸣、明亮度、沙哑度、气息、语速、情绪、地域口音与方言特征来创建目标音色。',
+        text: '通过文字描述性别、年龄、音高、共鸣、明亮度、沙哑度、气息、语速、情绪、地域口音与方言特征创建目标音色。后续参考素材入口同样统一支持音视频文件。',
       ),
       const InfoPage(
         title: '项目中心',
-        text: '短剧项目将统一管理视频片段、人物、Voice ID、处理状态与导出文件。已经验证的 Roformer 对白分离、Seed-VC 换声、环境声混回与 MP4 回写链路会作为完整项目流程接入。',
+        text: '短剧项目统一管理视频、音频、人物、Voice ID、处理状态与导出文件。所有涉及声音素材的入口统一支持音频与视频。',
       ),
       SettingsPage(
         server: server,
@@ -88,26 +88,11 @@ class _HomePageState extends State<HomePage> {
             onDestinationSelected: (v) => setState(() => index = v),
             labelType: NavigationRailLabelType.all,
             destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.auto_awesome),
-                label: Text('声演'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.record_voice_over),
-                label: Text('演员'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.graphic_eq),
-                label: Text('造声'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.video_library),
-                label: Text('项目'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.settings),
-                label: Text('设置'),
-              ),
+              NavigationRailDestination(icon: Icon(Icons.auto_awesome), label: Text('声演')),
+              NavigationRailDestination(icon: Icon(Icons.record_voice_over), label: Text('演员')),
+              NavigationRailDestination(icon: Icon(Icons.graphic_eq), label: Text('造声')),
+              NavigationRailDestination(icon: Icon(Icons.video_library), label: Text('项目')),
+              NavigationRailDestination(icon: Icon(Icons.settings), label: Text('设置')),
             ],
           ),
           const VerticalDivider(width: 1),
@@ -132,28 +117,28 @@ class _StudioPageState extends State<StudioPage> {
   PlatformFile? source;
   PlatformFile? target;
   bool running = false;
-  String result = '请选择源语音和目标参考声音。';
+  String result = '请选择源音视频和目标参考音视频。';
   double similarity = 0.7;
   double intelligibility = 0.7;
   int steps = 20;
 
-  Future<PlatformFile?> pickAudio() async {
+  Future<PlatformFile?> pickMedia() async {
     final r = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['wav', 'mp3', 'm4a', 'flac'],
+      type: FileType.any,
       allowMultiple: false,
+      withData: false,
     );
     return r?.files.single;
   }
 
   Future<void> convert() async {
     if (source?.path == null || target?.path == null) {
-      setState(() => result = '请先选择两个音频文件。');
+      setState(() => result = '请先选择源音视频和目标参考音视频。');
       return;
     }
     setState(() {
       running = true;
-      result = '正在通过 Seed-VC V2 换声…';
+      result = '正在上传音视频并通过 Seed-VC V2 换声…';
     });
     try {
       final req = http.MultipartRequest(
@@ -172,7 +157,7 @@ class _StudioPageState extends State<StudioPage> {
         'repetition_penalty': '1.0',
         'convert_style': 'false',
       });
-      final streamed = await req.send().timeout(const Duration(minutes: 5));
+      final streamed = await req.send().timeout(const Duration(minutes: 10));
       final body = await streamed.stream.bytesToString();
       final data = jsonDecode(body) as Map<String, dynamic>;
       if (streamed.statusCode == 200 && data['ok'] == true) {
@@ -222,9 +207,11 @@ class _StudioPageState extends State<StudioPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('导入语音换声', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+                const Text('导入音视频换声', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
-                const Text('连接当前已验证的 18110 Seed-VC V2 Worker。源语音保留台词、方言和表演，目标参考音频决定角色音色。'),
+                const Text('源文件和目标参考文件均支持音频或视频。前端不限制扩展名，统一作为媒体素材导入。'),
+                const SizedBox(height: 8),
+                const Text('常见格式：MP4 / MOV / MKV / AVI / WEBM / M4V / MPEG / MPG / TS / MTS / M2TS / WMV / FLV，以及 WAV / MP3 / FLAC / M4A / AAC / OGG / OPUS / WMA / AIFF / APE 等。', style: TextStyle(color: Colors.white70)),
                 const SizedBox(height: 18),
                 Wrap(
                   spacing: 12,
@@ -232,19 +219,19 @@ class _StudioPageState extends State<StudioPage> {
                   children: [
                     OutlinedButton.icon(
                       onPressed: running ? null : () async {
-                        final f = await pickAudio();
+                        final f = await pickMedia();
                         if (f != null) setState(() => source = f);
                       },
-                      icon: const Icon(Icons.audio_file),
-                      label: Text(source == null ? '选择源语音' : '源：${source!.name}'),
+                      icon: const Icon(Icons.perm_media),
+                      label: Text(source == null ? '选择源音视频' : '源：${source!.name}'),
                     ),
                     OutlinedButton.icon(
                       onPressed: running ? null : () async {
-                        final f = await pickAudio();
+                        final f = await pickMedia();
                         if (f != null) setState(() => target = f);
                       },
-                      icon: const Icon(Icons.person_pin_circle),
-                      label: Text(target == null ? '选择目标参考声音' : '目标：${target!.name}'),
+                      icon: const Icon(Icons.video_audio_call),
+                      label: Text(target == null ? '选择目标参考音视频' : '目标：${target!.name}'),
                     ),
                   ],
                 ),
@@ -283,6 +270,15 @@ class _StudioPageState extends State<StudioPage> {
           ),
         ),
         const SizedBox(height: 22),
+        const Text('统一媒体兼容规则', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(18),
+            child: Text('软件内所有涉及“声音素材”的功能统一支持音频文件和视频文件，包括：源声音、目标参考声音、AI演员参考素材、方言投稿、声音克隆、短剧角色绑定、对白分离、批量换声和声音设计参考素材。\n\n前端不再按扩展名限制用户；服务端统一使用 FFmpeg / 音频解码链路提取可处理音轨。'),
+          ),
+        ),
+        const SizedBox(height: 22),
         const Text('已验证完整链路', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 12),
         const Wrap(
@@ -294,13 +290,6 @@ class _StudioPageState extends State<StudioPage> {
             Feature(icon: Icons.surround_sound, title: '环境声还原', text: '换声对白与原环境轨重新混音。'),
             Feature(icon: Icons.video_file, title: 'MP4 无损画面回写', text: '原 HEVC 视频流直接 copy，只重新编码音频。'),
           ],
-        ),
-        const SizedBox(height: 20),
-        const Card(
-          child: Padding(
-            padding: EdgeInsets.all(18),
-            child: Text('完整短剧流程：MP4 → 提取音轨 → Roformer分离对白 → Seed-VC角色换声 → BGM/环境声/音效混回 → 原画面回写MP4。\n\n当前测试版已把实时 Seed-VC 换声做成可操作功能；完整 MP4 自动流水线下一步接入主服务 API 后，Windows / Android / iOS 三端共用同一套处理能力。'),
-          ),
         ),
       ],
     );
@@ -383,7 +372,7 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 16),
             FilledButton.icon(onPressed: widget.onCheck, icon: const Icon(Icons.health_and_safety), label: Text('检测服务器 · ${widget.status}')),
             const SizedBox(height: 18),
-            Text(Platform.isWindows ? '当前平台：Windows · 本机服务器可使用 127.0.0.1' : '移动端请填写运行 NOVRIA Voice Server 的电脑局域网或公网地址。'),
+            Text(Platform.isWindows ? '当前平台：Windows · 本机服务器可使用 127.0.0.1。' : '移动端请填写运行 NOVRIA Voice Server 的电脑局域网或公网地址。'),
           ],
         ),
       );
