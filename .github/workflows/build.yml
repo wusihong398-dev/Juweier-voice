@@ -32,7 +32,7 @@ jobs:
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
-          name: 橘味儿配音-Android-v0.3.1
+          name: 橘味儿配音-Android-v0.3.2
           path: build/app/outputs/flutter-apk/app-release.apk
 
   windows:
@@ -69,7 +69,7 @@ jobs:
           if (Test-Path $old) { Rename-Item $old '橘味儿配音.exe' -Force }
       - uses: actions/upload-artifact@v4
         with:
-          name: 橘味儿配音-Windows-v0.3.1
+          name: 橘味儿配音-Windows-v0.3.2
           path: build/windows/x64/runner/Release/**
 
   ios:
@@ -94,5 +94,5 @@ jobs:
       - run: flutter build ios --release --no-codesign
       - uses: actions/upload-artifact@v4
         with:
-          name: 橘味儿配音-iOS-unsigned-v0.3.1
+          name: 橘味儿配音-iOS-unsigned-v0.3.2
           path: build/ios/iphoneos/Runner.app/**
