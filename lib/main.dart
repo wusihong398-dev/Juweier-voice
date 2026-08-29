@@ -12,7 +12,7 @@ class JuweierVoiceApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
-    title: '橘味儿AI声演',
+    title: '橘味儿配音',
     theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xffff6b00), brightness: Brightness.dark), scaffoldBackgroundColor: const Color(0xff100b0a), cardTheme: const CardThemeData(color: Color(0xff211814))),
     home: const HomePage(),
   );
@@ -110,7 +110,7 @@ class _StudioPageState extends State<StudioPage> {
   }
 
   @override Widget build(BuildContext context)=>ListView(padding:const EdgeInsets.all(28),children:[
-    Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('橘味儿AI声演',style:TextStyle(fontSize:30,fontWeight:FontWeight.w800)),SizedBox(height:6),Text('Seed-VC V2 · 方言与表演保真 · 对白分离 · 环境声还原')])),ActionChip(avatar:const Icon(Icons.circle,size:12),label:Text(widget.status),onPressed:widget.onCheck)]),
+    Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('橘味儿配音',style:TextStyle(fontSize:30,fontWeight:FontWeight.w800)),SizedBox(height:6),Text('Seed-VC V2 · 方言与表演保真 · 对白分离 · 环境声还原')])),ActionChip(avatar:const Icon(Icons.circle,size:12),label:Text(widget.status),onPressed:widget.onCheck)]),
     const SizedBox(height:24), const Text('导入音视频换声',style:TextStyle(fontSize:21,fontWeight:FontWeight.bold)), const SizedBox(height:10),
     Card(child:Padding(padding:const EdgeInsets.all(20),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       const Text('所有声音入口统一支持音频和视频。iPhone 可直接从相册选择视频，不必先导出声音文件。'),const SizedBox(height:16),
@@ -120,7 +120,7 @@ class _StudioPageState extends State<StudioPage> {
       FilledButton.icon(onPressed:running?null:convert,icon:running?const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2)):const Icon(Icons.auto_awesome),label:Text(running?'正在换声…':'开始AI换声')),const SizedBox(height:14),SelectableText(result)
     ]))),
     const SizedBox(height:22),const Text('iPhone 友好导入',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold)),const SizedBox(height:10),
-    const Wrap(spacing:14,runSpacing:14,children:[Feature(icon:Icons.photo_library,title:'相册视频',text:'直接选短剧或参考视频，服务器统一提取声音。'),Feature(icon:Icons.folder_open,title:'文件',text:'继续支持 iCloud Drive 与本地音视频。'),Feature(icon:Icons.mic,title:'直接录音',text:'下一阶段加入录音后直接保存AI演员。'),Feature(icon:Icons.share,title:'系统分享',text:'下一阶段支持从其他App分享进橘味儿AI声演。')]),
+    const Wrap(spacing:14,runSpacing:14,children:[Feature(icon:Icons.photo_library,title:'相册视频',text:'直接选短剧或参考视频，服务器统一提取声音。'),Feature(icon:Icons.folder_open,title:'文件',text:'继续支持 iCloud Drive 与本地音视频。'),Feature(icon:Icons.mic,title:'直接录音',text:'下一阶段加入录音后直接保存AI演员。'),Feature(icon:Icons.share,title:'系统分享',text:'下一阶段支持从其他App分享进橘味儿配音。')]),
     const SizedBox(height:22),const Text('已验证完整链路',style:TextStyle(fontSize:20,fontWeight:FontWeight.bold)),const SizedBox(height:10),
     const Wrap(spacing:14,runSpacing:14,children:[Feature(icon:Icons.movie_filter,title:'MP4批量换声',text:'10条批量测试成功。'),Feature(icon:Icons.spatial_audio_off,title:'Roformer对白分离',text:'对白与背景/环境/音效分离。'),Feature(icon:Icons.surround_sound,title:'环境声还原',text:'换声对白与原环境轨重新混音。'),Feature(icon:Icons.video_file,title:'原画面回写',text:'HEVC视频流直接copy，只重新编码音频。')])
   ]);
