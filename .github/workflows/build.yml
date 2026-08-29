@@ -13,22 +13,17 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Create Android platform
-        run: flutter create --platforms=android .
-      - name: Remove generated sample test
-        run: rm -f test/widget_test.dart
+      - run: flutter create --platforms=android .
+      - run: rm -f test/widget_test.dart
       - name: Use Android compileSdk 36
-        run: |
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' android/app/build.gradle.kts
-          grep -n "compileSdk" android/app/build.gradle.kts
+        run: sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' android/app/build.gradle.kts
       - run: flutter pub get
-      - name: Generate Android orange microphone icon
-        run: dart run flutter_launcher_icons -f flutter_launcher_icons_android.yaml
+      - run: dart run flutter_launcher_icons -f flutter_launcher_icons_android.yaml
       - run: flutter analyze
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
-          name: Juweier-Voice-Android-v0.2.0
+          name: Juweier-Voice-Android-v0.3.0
           path: build/app/outputs/flutter-apk/app-release.apk
 
   windows:
@@ -38,21 +33,17 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Enable Windows
-        run: flutter config --enable-windows-desktop
-      - name: Create Windows platform
-        run: flutter create --platforms=windows .
-      - name: Remove generated sample test
-        shell: pwsh
+      - run: flutter config --enable-windows-desktop
+      - run: flutter create --platforms=windows .
+      - shell: pwsh
         run: Remove-Item test/widget_test.dart -Force -ErrorAction SilentlyContinue
       - run: flutter pub get
-      - name: Generate Windows orange microphone icon
-        run: dart run flutter_launcher_icons -f flutter_launcher_icons_windows.yaml
+      - run: dart run flutter_launcher_icons -f flutter_launcher_icons_windows.yaml
       - run: flutter analyze
       - run: flutter build windows --release
       - uses: actions/upload-artifact@v4
         with:
-          name: Juweier-Voice-Windows-v0.2.0
+          name: Juweier-Voice-Windows-v0.3.0
           path: build/windows/x64/runner/Release/**
 
   ios:
@@ -62,17 +53,18 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Create iOS platform
-        run: flutter create --platforms=ios .
-      - name: Remove generated sample test
-        run: rm -f test/widget_test.dart
+      - run: flutter create --platforms=ios .
+      - run: rm -f test/widget_test.dart
+      - name: Add iPhone media permissions
+        run: |
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 橘味儿AI声演需要访问相册中的视频作为配音和参考声音素材" ios/Runner/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 橘味儿AI声演需要使用相机录制视频作为声音素材" ios/Runner/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 橘味儿AI声演需要使用麦克风采集配音和参考声音" ios/Runner/Info.plist || true
       - run: flutter pub get
-      - name: Generate iOS orange microphone icon
-        run: dart run flutter_launcher_icons -f flutter_launcher_icons_ios.yaml
+      - run: dart run flutter_launcher_icons -f flutter_launcher_icons_ios.yaml
       - run: flutter analyze
-      - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign
+      - run: flutter build ios --release --no-codesign
       - uses: actions/upload-artifact@v4
         with:
-          name: Juweier-Voice-iOS-unsigned-v0.2.0
+          name: Juweier-Voice-iOS-unsigned-v0.3.0
           path: build/ios/iphoneos/Runner.app/**
