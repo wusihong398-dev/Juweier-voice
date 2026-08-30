@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $Root = 'F:\NOVRIA-Voice-Server\Juweier-voice'
-$Python = 'F:\NOVRIA-Voice-Server\.venv-video\Scripts\python.exe'
+$Python = 'F:\NOVRIA-Voice-Server\.venv-vc\Scripts\python.exe'
 $Service = Join-Path $Root 'ai-workers\audio_service.py'
 
 if (-not (Test-Path $Python)) {
