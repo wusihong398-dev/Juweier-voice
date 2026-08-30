@@ -16,10 +16,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 APP_NAME = "橘味儿配音 Audio Service"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 DEFAULT_VC_WORKER = os.getenv("JUWEIER_VC_WORKER", "http://127.0.0.1:18110").rstrip("/")
 DEFAULT_FFMPEG = os.getenv("JUWEIER_FFMPEG", r"F:\NOVRIA-Voice-Server\tools\ffmpeg\bin\ffmpeg.exe")
 DEFAULT_FFPROBE = os.getenv("JUWEIER_FFPROBE", r"F:\NOVRIA-Voice-Server\tools\ffmpeg\bin\ffprobe.exe")
+DEFAULT_SEPARATOR = os.getenv(
+    "JUWEIER_SEPARATOR",
+    r"F:\NOVRIA-Voice-Server\.venv-separation\Scripts\audio-separator.exe",
+)
+DEFAULT_SEPARATOR_MODEL_DIR = os.getenv(
+    "JUWEIER_SEPARATOR_MODEL_DIR",
+    r"F:\NOVRIA-Voice-Server\models\separation",
+)
+DEFAULT_SEPARATOR_MODEL = os.getenv(
+    "JUWEIER_SEPARATOR_MODEL",
+    "model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+)
 DATA_ROOT = Path(os.getenv("JUWEIER_AUDIO_DATA", r"E:\NOVRIA-Voice-Data\audio-service"))
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -42,7 +54,10 @@ def _require_binary(path: str, name: str) -> str:
     raise HTTPException(status_code=503, detail=f"{name} not found: {path}")
 
 
-def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(command: list[str], *, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(
         command,
         capture_output=True,
@@ -50,9 +65,10 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=env,
     )
     if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=result.stderr[-4000:] or "media command failed")
+        raise HTTPException(status_code=500, detail=result.stderr[-5000:] or result.stdout[-5000:] or "media command failed")
     return result
 
 
@@ -105,6 +121,67 @@ def _extract_audio(source: Path, output: Path) -> Path:
     return output
 
 
+def _extract_master_audio(source: Path, output: Path) -> Path:
+    ffmpeg = _require_binary(DEFAULT_FFMPEG, "ffmpeg")
+    _run([
+        ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "2", "-ar", "44100",
+        "-c:a", "pcm_s24le", str(output)
+    ])
+    return output
+
+
+def _separate_vocals(master_audio: Path, output_dir: Path) -> tuple[Path, Path]:
+    separator = _require_binary(DEFAULT_SEPARATOR, "audio-separator")
+    model_dir = Path(DEFAULT_SEPARATOR_MODEL_DIR)
+    model_path = model_dir / DEFAULT_SEPARATOR_MODEL
+    if not model_path.exists():
+        raise HTTPException(status_code=503, detail=f"Roformer model not found: {model_path}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ffmpeg_dir = str(Path(_require_binary(DEFAULT_FFMPEG, "ffmpeg")).parent)
+    process_path = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+    _run([
+        separator,
+        str(master_audio),
+        "--model_filename", DEFAULT_SEPARATOR_MODEL,
+        "--model_file_dir", str(model_dir),
+        "--output_dir", str(output_dir),
+        "--output_format", "WAV",
+        "--sample_rate", "44100",
+        "--normalization", "0.9",
+    ], extra_env={"PATH": process_path})
+
+    files = list(output_dir.glob("*.wav"))
+    vocals = next((p for p in files if "(Vocals)" in p.name), None)
+    instrumental = next((p for p in files if "(Instrumental)" in p.name), None)
+    if vocals is None or instrumental is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": "Roformer output stems not found", "files": [p.name for p in files]},
+        )
+    return vocals, instrumental
+
+
+def _mix_voice_with_background(voice: Path, background: Path, output: Path) -> Path:
+    ffmpeg = _require_binary(DEFAULT_FFMPEG, "ffmpeg")
+    filter_complex = (
+        "[0:a]aresample=44100,pan=stereo|c0=c0|c1=c0[voice];"
+        "[1:a]aresample=44100[bg];"
+        "[bg][voice]amix=inputs=2:duration=longest:normalize=0,"
+        "alimiter=limit=0.891[mix]"
+    )
+    _run([
+        ffmpeg, "-y",
+        "-i", str(voice),
+        "-i", str(background),
+        "-filter_complex", filter_complex,
+        "-map", "[mix]",
+        "-ar", "44100", "-ac", "2", "-c:a", "pcm_s24le",
+        str(output),
+    ])
+    return output
+
+
 async def _vc_convert_paths(source_path: Path, target_path: Path, *, diffusion_steps: int = 20,
                             length_adjust: float = 1.0, intelligibility_cfg_rate: float = 0.7,
                             similarity_cfg_rate: float = 0.7, top_p: float = 0.9,
@@ -125,7 +202,7 @@ async def _vc_convert_paths(source_path: Path, target_path: Path, *, diffusion_s
         "convert_style": "true" if convert_style else "false",
     }
     try:
-        async with httpx.AsyncClient(timeout=900) as client:
+        async with httpx.AsyncClient(timeout=1800) as client:
             response = await client.post(f"{DEFAULT_VC_WORKER}/api/v1/vc/convert", files=files, data=data)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"VC worker unavailable: {exc}") from exc
@@ -145,7 +222,7 @@ def _mux_video_with_audio(video: Path, audio: Path, output: Path) -> Path:
     _run([
         ffmpeg, "-y", "-i", str(video), "-i", str(audio),
         "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest", str(output)
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", str(output)
     ])
     return output
 
@@ -162,6 +239,8 @@ async def health() -> dict[str, Any]:
                 vc_data = response.json()
     except Exception:
         vc_ok = False
+    separator_path = Path(DEFAULT_SEPARATOR)
+    separator_model = Path(DEFAULT_SEPARATOR_MODEL_DIR) / DEFAULT_SEPARATOR_MODEL
     return {
         "ok": True,
         "service": "juweier-audio",
@@ -175,6 +254,8 @@ async def health() -> dict[str, Any]:
         "vc_worker": {"url": DEFAULT_VC_WORKER, "online": vc_ok, "data": vc_data},
         "ffmpeg": Path(DEFAULT_FFMPEG).exists() or bool(shutil.which("ffmpeg")),
         "ffprobe": Path(DEFAULT_FFPROBE).exists() or bool(shutil.which("ffprobe")),
+        "separator": {"online": separator_path.exists(), "path": str(separator_path)},
+        "separator_model": {"ready": separator_model.exists(), "name": DEFAULT_SEPARATOR_MODEL},
     }
 
 
@@ -235,26 +316,18 @@ async def simple_dubbing(
     intelligibility_cfg_rate: float = Form(0.7),
     similarity_cfg_rate: float = Form(0.7),
 ) -> dict[str, Any]:
-    """One-click simple dubbing: media -> audio -> Seed-VC -> mux back to video when possible.
-
-    This endpoint intentionally does not claim dialogue/background separation yet. It is the stable
-    first production step while the Roformer multi-stem pipeline is being wrapped into the service.
-    """
     task_id = str(uuid.uuid4())
     job_dir = DATA_ROOT / "dubbing" / task_id
     job_dir.mkdir(parents=True, exist_ok=True)
-
     media_path = await _save_upload(media, job_dir, "media")
     target_path = await _save_upload(target, job_dir, "target")
     media_info = _probe(media_path)
     if not media_info["has_audio"]:
         raise HTTPException(status_code=400, detail="input media has no audio stream")
-
     source_wav = _extract_audio(media_path, job_dir / "source.wav")
     target_wav = _extract_audio(target_path, job_dir / "target.wav")
     vc = await _vc_convert_paths(
-        source_wav,
-        target_wav,
+        source_wav, target_wav,
         diffusion_steps=diffusion_steps,
         intelligibility_cfg_rate=intelligibility_cfg_rate,
         similarity_cfg_rate=similarity_cfg_rate,
@@ -262,7 +335,6 @@ async def simple_dubbing(
     vc_output = Path(str(vc.get("output_path", "")))
     if not vc_output.exists():
         raise HTTPException(status_code=502, detail=f"VC output not found: {vc_output}")
-
     if media_info["has_video"]:
         final_output = _mux_video_with_audio(media_path, vc_output, job_dir / "final.mp4")
         output_kind = "video"
@@ -270,7 +342,6 @@ async def simple_dubbing(
         final_output = job_dir / "final.wav"
         shutil.copy2(vc_output, final_output)
         output_kind = "audio"
-
     return {
         "ok": True,
         "task_id": task_id,
@@ -279,7 +350,83 @@ async def simple_dubbing(
         "output_path": str(final_output),
         "media": media_info,
         "vc": vc,
-        "note": "当前为稳定的一键换声回写链路；Roformer对白/环境声分离混回将在后续接口接入。",
+        "note": "调试接口：整轨换声，不作为短剧正式默认流程。",
+    }
+
+
+@app.post("/api/v1/dubbing/full")
+async def full_dubbing(
+    media: UploadFile = File(...),
+    target: UploadFile = File(...),
+    diffusion_steps: int = Form(20),
+    intelligibility_cfg_rate: float = Form(0.7),
+    similarity_cfg_rate: float = Form(0.7),
+) -> dict[str, Any]:
+    """Production-oriented dubbing pipeline.
+
+    Source: media -> 44.1k stereo master -> Roformer Vocals/Instrumental.
+    Target reference: media/audio -> 44.1k stereo master -> Roformer Vocals.
+    Only clean source vocals are converted by Seed-VC, then mixed with the untouched
+    instrumental/background stem and limited to roughly -1 dBFS before muxing.
+    """
+    task_id = str(uuid.uuid4())
+    job_dir = DATA_ROOT / "dubbing" / task_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    media_path = await _save_upload(media, job_dir, "media")
+    target_path = await _save_upload(target, job_dir, "target")
+    media_info = _probe(media_path)
+    target_info = _probe(target_path)
+    if not media_info["has_audio"]:
+        raise HTTPException(status_code=400, detail="input media has no audio stream")
+    if not target_info["has_audio"]:
+        raise HTTPException(status_code=400, detail="target reference has no audio stream")
+
+    source_master = _extract_master_audio(media_path, job_dir / "source_master.wav")
+    target_master = _extract_master_audio(target_path, job_dir / "target_master.wav")
+
+    source_vocals, source_instrumental = _separate_vocals(source_master, job_dir / "source_separation")
+    target_vocals, _target_instrumental = _separate_vocals(target_master, job_dir / "target_separation")
+
+    source_vc_input = _extract_audio(source_vocals, job_dir / "source_vocals_vc.wav")
+    target_vc_input = _extract_audio(target_vocals, job_dir / "target_vocals_vc.wav")
+
+    vc = await _vc_convert_paths(
+        source_vc_input,
+        target_vc_input,
+        diffusion_steps=diffusion_steps,
+        intelligibility_cfg_rate=intelligibility_cfg_rate,
+        similarity_cfg_rate=similarity_cfg_rate,
+    )
+    vc_output = Path(str(vc.get("output_path", "")))
+    if not vc_output.exists():
+        raise HTTPException(status_code=502, detail=f"VC output not found: {vc_output}")
+
+    mixed_audio = _mix_voice_with_background(vc_output, source_instrumental, job_dir / "final_mix.wav")
+    if media_info["has_video"]:
+        final_output = _mux_video_with_audio(media_path, mixed_audio, job_dir / "final.mp4")
+        output_kind = "video"
+    else:
+        final_output = job_dir / "final.wav"
+        shutil.copy2(mixed_audio, final_output)
+        output_kind = "audio"
+
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "mode": "full_dubbing",
+        "output_kind": output_kind,
+        "output_path": str(final_output),
+        "mix_path": str(mixed_audio),
+        "media": media_info,
+        "target": target_info,
+        "stems": {
+            "source_vocals": str(source_vocals),
+            "source_instrumental": str(source_instrumental),
+            "target_vocals": str(target_vocals),
+        },
+        "vc": vc,
+        "note": "正式测试链路：Roformer人声分离 -> 仅对白换声 -> 背景轨混回 -> -1dBFS limiter -> 回写视频。",
     }
 
 
