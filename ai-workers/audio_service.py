@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 APP_NAME = "橘味儿配音 Audio Service"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 DEFAULT_VC_WORKER = os.getenv("JUWEIER_VC_WORKER", "http://127.0.0.1:18110").rstrip("/")
 DEFAULT_FFMPEG = os.getenv("JUWEIER_FFMPEG", r"F:\NOVRIA-Voice-Server\tools\ffmpeg\bin\ffmpeg.exe")
 DEFAULT_FFPROBE = os.getenv("JUWEIER_FFPROBE", r"F:\NOVRIA-Voice-Server\tools\ffmpeg\bin\ffprobe.exe")
@@ -68,7 +68,10 @@ def _run(command: list[str], *, extra_env: dict[str, str] | None = None) -> subp
         env=env,
     )
     if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=result.stderr[-5000:] or result.stdout[-5000:] or "media command failed")
+        raise HTTPException(
+            status_code=500,
+            detail=result.stderr[-5000:] or result.stdout[-5000:] or "media command failed",
+        )
     return result
 
 
@@ -94,7 +97,12 @@ async def _save_upload(upload: UploadFile, folder: Path, stem: str = "input") ->
 def _probe(path: Path) -> dict[str, Any]:
     ffprobe = _require_binary(DEFAULT_FFPROBE, "ffprobe")
     payload = _run_json([
-        ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)
+        ffprobe,
+        "-v", "error",
+        "-show_format",
+        "-show_streams",
+        "-of", "json",
+        str(path),
     ])
     streams = payload.get("streams", [])
     format_info = payload.get("format", {})
@@ -113,19 +121,46 @@ def _probe(path: Path) -> dict[str, Any]:
 
 
 def _extract_audio(source: Path, output: Path) -> Path:
+    """Seed-VC compatibility audio for generic/debug endpoints."""
     ffmpeg = _require_binary(DEFAULT_FFMPEG, "ffmpeg")
     _run([
-        ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "22050",
-        "-c:a", "pcm_s16le", str(output)
+        ffmpeg, "-y", "-i", str(source), "-vn",
+        "-ac", "1", "-ar", "22050", "-c:a", "pcm_s16le", str(output),
     ])
     return output
 
 
 def _extract_master_audio(source: Path, output: Path) -> Path:
+    """High-quality stereo master used by separation and final mixing."""
     ffmpeg = _require_binary(DEFAULT_FFMPEG, "ffmpeg")
     _run([
-        ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "2", "-ar", "44100",
-        "-c:a", "pcm_s24le", str(output)
+        ffmpeg, "-y", "-i", str(source), "-vn",
+        "-ac", "2", "-ar", "44100", "-c:a", "pcm_s24le", str(output),
+    ])
+    return output
+
+
+def _prepare_vc_vocals(source: Path, output: Path, *, target_reference: bool = False) -> Path:
+    """Prepare a separated vocal stem for Seed-VC without destroying source timing.
+
+    Source dialogue keeps exact timing. Target reference may trim only leading/trailing silence.
+    Filtering is deliberately gentle to avoid magnifying Roformer artifacts.
+    """
+    ffmpeg = _require_binary(DEFAULT_FFMPEG, "ffmpeg")
+    filters = [
+        "highpass=f=70",
+        "lowpass=f=10500",
+        "volume=0.92",
+    ]
+    if target_reference:
+        filters.append(
+            "silenceremove=start_periods=1:start_duration=0.15:start_threshold=-48dB:"
+            "stop_periods=1:stop_duration=0.30:stop_threshold=-48dB"
+        )
+    _run([
+        ffmpeg, "-y", "-i", str(source), "-vn",
+        "-af", ",".join(filters),
+        "-ac", "1", "-ar", "22050", "-c:a", "pcm_s16le", str(output),
     ])
     return output
 
@@ -162,13 +197,32 @@ def _separate_vocals(master_audio: Path, output_dir: Path) -> tuple[Path, Path]:
     return vocals, instrumental
 
 
-def _mix_voice_with_background(voice: Path, background: Path, output: Path) -> Path:
+def _mix_voice_with_background(
+    voice: Path,
+    background: Path,
+    output: Path,
+    *,
+    voice_gain: float = 0.94,
+    background_gain: float = 0.96,
+) -> Path:
+    """Center converted dialogue, preserve stereo background, duck residual original voice and master safely."""
     ffmpeg = _require_binary(DEFAULT_FFMPEG, "ffmpeg")
+    voice_gain = max(0.25, min(2.0, voice_gain))
+    background_gain = max(0.25, min(2.0, background_gain))
+
+    # The converted mono dialogue is duplicated only for the center image.
+    # A copy drives side-chain compression on the background, reducing faint original-voice residue
+    # only while dialogue is active. The final loudnorm/limiter provides codec-safe headroom.
     filter_complex = (
-        "[0:a]aresample=44100,pan=stereo|c0=c0|c1=c0[voice];"
-        "[1:a]aresample=44100[bg];"
-        "[bg][voice]amix=inputs=2:duration=longest:normalize=0,"
-        "alimiter=limit=0.891[mix]"
+        f"[0:a]aresample=44100,volume={voice_gain:.4f},"
+        "highpass=f=65,lowpass=f=15000,"
+        "pan=stereo|c0=c0|c1=c0,asplit=2[voice_mix][voice_sc];"
+        f"[1:a]aresample=44100,volume={background_gain:.4f}[bg];"
+        "[bg][voice_sc]sidechaincompress="
+        "threshold=0.020:ratio=2.5:attack=12:release=220:makeup=1[bg_ducked];"
+        "[bg_ducked][voice_mix]amix=inputs=2:duration=longest:normalize=0,"
+        "loudnorm=I=-16:LRA=11:TP=-1.5,"
+        "alimiter=limit=0.841395:attack=5:release=50[mix]"
     )
     _run([
         ffmpeg, "-y",
@@ -182,11 +236,19 @@ def _mix_voice_with_background(voice: Path, background: Path, output: Path) -> P
     return output
 
 
-async def _vc_convert_paths(source_path: Path, target_path: Path, *, diffusion_steps: int = 20,
-                            length_adjust: float = 1.0, intelligibility_cfg_rate: float = 0.7,
-                            similarity_cfg_rate: float = 0.7, top_p: float = 0.9,
-                            temperature: float = 1.0, repetition_penalty: float = 1.0,
-                            convert_style: bool = False) -> dict[str, Any]:
+async def _vc_convert_paths(
+    source_path: Path,
+    target_path: Path,
+    *,
+    diffusion_steps: int = 20,
+    length_adjust: float = 1.0,
+    intelligibility_cfg_rate: float = 0.7,
+    similarity_cfg_rate: float = 0.7,
+    top_p: float = 0.9,
+    temperature: float = 1.0,
+    repetition_penalty: float = 1.0,
+    convert_style: bool = False,
+) -> dict[str, Any]:
     files = {
         "source": (source_path.name, source_path.read_bytes(), "application/octet-stream"),
         "target": (target_path.name, target_path.read_bytes(), "application/octet-stream"),
@@ -203,7 +265,11 @@ async def _vc_convert_paths(source_path: Path, target_path: Path, *, diffusion_s
     }
     try:
         async with httpx.AsyncClient(timeout=1800) as client:
-            response = await client.post(f"{DEFAULT_VC_WORKER}/api/v1/vc/convert", files=files, data=data)
+            response = await client.post(
+                f"{DEFAULT_VC_WORKER}/api/v1/vc/convert",
+                files=files,
+                data=data,
+            )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"VC worker unavailable: {exc}") from exc
     try:
@@ -220,9 +286,18 @@ async def _vc_convert_paths(source_path: Path, target_path: Path, *, diffusion_s
 def _mux_video_with_audio(video: Path, audio: Path, output: Path) -> Path:
     ffmpeg = _require_binary(DEFAULT_FFMPEG, "ffmpeg")
     _run([
-        ffmpeg, "-y", "-i", str(video), "-i", str(audio),
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", str(output)
+        ffmpeg, "-y",
+        "-i", str(video),
+        "-i", str(audio),
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "44100",
+        "-ac", "2",
+        "-shortest",
+        str(output),
     ])
     return output
 
@@ -246,6 +321,13 @@ async def health() -> dict[str, Any]:
         "service": "juweier-audio",
         "version": APP_VERSION,
         "audio_first": True,
+        "audio_quality_profile": {
+            "name": "dubbing_hq_v1",
+            "mix_lufs": -16,
+            "true_peak_db": -1.5,
+            "background_residual_ducking": True,
+            "stereo_background_preserved": True,
+        },
         "video_generation": {
             "enabled": True,
             "stage": "development_testing",
@@ -296,7 +378,8 @@ async def vc_convert(
     source_audio = _extract_audio(source_path, job_dir / "source.wav")
     target_audio = _extract_audio(target_path, job_dir / "target.wav")
     return await _vc_convert_paths(
-        source_audio, target_audio,
+        source_audio,
+        target_audio,
         diffusion_steps=diffusion_steps,
         length_adjust=length_adjust,
         intelligibility_cfg_rate=intelligibility_cfg_rate,
@@ -327,7 +410,8 @@ async def simple_dubbing(
     source_wav = _extract_audio(media_path, job_dir / "source.wav")
     target_wav = _extract_audio(target_path, job_dir / "target.wav")
     vc = await _vc_convert_paths(
-        source_wav, target_wav,
+        source_wav,
+        target_wav,
         diffusion_steps=diffusion_steps,
         intelligibility_cfg_rate=intelligibility_cfg_rate,
         similarity_cfg_rate=similarity_cfg_rate,
@@ -361,13 +445,16 @@ async def full_dubbing(
     diffusion_steps: int = Form(20),
     intelligibility_cfg_rate: float = Form(0.7),
     similarity_cfg_rate: float = Form(0.7),
+    voice_gain: float = Form(0.94),
+    background_gain: float = Form(0.96),
 ) -> dict[str, Any]:
-    """Production-oriented dubbing pipeline.
+    """High-quality dubbing pipeline.
 
-    Source: media -> 44.1k stereo master -> Roformer Vocals/Instrumental.
-    Target reference: media/audio -> 44.1k stereo master -> Roformer Vocals.
-    Only clean source vocals are converted by Seed-VC, then mixed with the untouched
-    instrumental/background stem and limited to roughly -1 dBFS before muxing.
+    Source -> 44.1k stereo master -> Roformer Vocals/Instrumental.
+    Target -> 44.1k stereo master -> Roformer Vocals -> trimmed/clean reference.
+    Only source vocals are converted by Seed-VC. The converted dialogue is centered,
+    background stays stereo, residual original voice is dynamically ducked, and the
+    final master targets -16 LUFS / -1.5 dBTP before muxing.
     """
     task_id = str(uuid.uuid4())
     job_dir = DATA_ROOT / "dubbing" / task_id
@@ -385,11 +472,25 @@ async def full_dubbing(
     source_master = _extract_master_audio(media_path, job_dir / "source_master.wav")
     target_master = _extract_master_audio(target_path, job_dir / "target_master.wav")
 
-    source_vocals, source_instrumental = _separate_vocals(source_master, job_dir / "source_separation")
-    target_vocals, _target_instrumental = _separate_vocals(target_master, job_dir / "target_separation")
+    source_vocals, source_instrumental = _separate_vocals(
+        source_master,
+        job_dir / "source_separation",
+    )
+    target_vocals, _target_instrumental = _separate_vocals(
+        target_master,
+        job_dir / "target_separation",
+    )
 
-    source_vc_input = _extract_audio(source_vocals, job_dir / "source_vocals_vc.wav")
-    target_vc_input = _extract_audio(target_vocals, job_dir / "target_vocals_vc.wav")
+    source_vc_input = _prepare_vc_vocals(
+        source_vocals,
+        job_dir / "source_vocals_vc.wav",
+        target_reference=False,
+    )
+    target_vc_input = _prepare_vc_vocals(
+        target_vocals,
+        job_dir / "target_vocals_vc.wav",
+        target_reference=True,
+    )
 
     vc = await _vc_convert_paths(
         source_vc_input,
@@ -402,7 +503,13 @@ async def full_dubbing(
     if not vc_output.exists():
         raise HTTPException(status_code=502, detail=f"VC output not found: {vc_output}")
 
-    mixed_audio = _mix_voice_with_background(vc_output, source_instrumental, job_dir / "final_mix.wav")
+    mixed_audio = _mix_voice_with_background(
+        vc_output,
+        source_instrumental,
+        job_dir / "final_mix.wav",
+        voice_gain=voice_gain,
+        background_gain=background_gain,
+    )
     if media_info["has_video"]:
         final_output = _mux_video_with_audio(media_path, mixed_audio, job_dir / "final.mp4")
         output_kind = "video"
@@ -414,7 +521,8 @@ async def full_dubbing(
     return {
         "ok": True,
         "task_id": task_id,
-        "mode": "full_dubbing",
+        "mode": "full_dubbing_hq",
+        "quality_profile": "dubbing_hq_v1",
         "output_kind": output_kind,
         "output_path": str(final_output),
         "mix_path": str(mixed_audio),
@@ -424,9 +532,19 @@ async def full_dubbing(
             "source_vocals": str(source_vocals),
             "source_instrumental": str(source_instrumental),
             "target_vocals": str(target_vocals),
+            "source_vc_input": str(source_vc_input),
+            "target_vc_input": str(target_vc_input),
+        },
+        "mix": {
+            "voice_gain": voice_gain,
+            "background_gain": background_gain,
+            "target_lufs": -16,
+            "true_peak_db": -1.5,
+            "background_residual_ducking": True,
+            "stereo_background_preserved": True,
         },
         "vc": vc,
-        "note": "正式测试链路：Roformer人声分离 -> 仅对白换声 -> 背景轨混回 -> -1dBFS limiter -> 回写视频。",
+        "note": "0.4.1音质优化：轻度人声净化、参考音频去首尾静音、背景残声动态压低、对白居中、立体声背景保留、-16 LUFS / -1.5 dBTP安全母带。",
     }
 
 
@@ -455,4 +573,9 @@ async def video_status() -> dict[str, Any]:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("JUWEIER_AUDIO_PORT", "18115")))
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("JUWEIER_AUDIO_PORT", "18115")),
+    )
